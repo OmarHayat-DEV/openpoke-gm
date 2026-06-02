@@ -70,6 +70,16 @@ class InteractionAgentRuntime:
             self.conversation_log.record_user_message(user_message)
 
             system_prompt = build_system_prompt()
+            # In the below prepare_message_with_history(), 
+            # we call _render_active_agents()
+            # this prepares, using /server/services/execution/roster.py,
+            # the available agents, stored in:
+            # /server/data/execution_agents/roster.json
+            # This func returns something like:
+            # section 1: history with user
+            # section 2: active agents
+            # section 3: latest text
+            # Execution agent overload happens when section 2 becomes poluted
             messages = prepare_message_with_history(
                 user_message, transcript_before, message_type="user"
             )
