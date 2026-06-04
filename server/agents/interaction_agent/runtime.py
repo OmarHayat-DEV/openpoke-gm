@@ -8,6 +8,7 @@ from .agent import build_system_prompt, prepare_message_with_history
 from .tools import ToolResult, get_tool_schemas, handle_tool_call
 from ...config import get_settings
 from ...services.conversation import get_conversation_log, get_working_memory_log
+from ...services.execution.compactor import maybe_compact_execution_agents
 from ...openrouter_client import request_chat_completion
 from ...logging_config import logger
 
@@ -69,6 +70,7 @@ class InteractionAgentRuntime:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_user_message(user_message)
 
+
             system_prompt = build_system_prompt()
             # In the below prepare_message_with_history(), 
             # we call _render_active_agents()
@@ -80,6 +82,17 @@ class InteractionAgentRuntime:
             # section 2: active agents
             # section 3: latest text
             # Execution agent overload happens when section 2 becomes poluted
+            # ----------
+            # Proposed solution:
+            # - have a clean up agent run when roster size exceeds threshold
+            # - have clean up agent summarize the logs and assign a new roster
+            #   grouping into upto say 5 new execution agents
+            # - create an 'archive' folder that stores pre compression logs
+            #   the archive folder has sub-folders that are the date compression
+            #   occured (this allows us to trace back compressions and test for data loss)
+            # - this way section 2 remains manageable by the interaction agent
+            # ----------
+            await maybe_compact_execution_agents()
             messages = prepare_message_with_history(
                 user_message, transcript_before, message_type="user"
             )
@@ -113,6 +126,8 @@ class InteractionAgentRuntime:
         try:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_agent_message(agent_message)
+
+            await maybe_compact_execution_agents()
 
             system_prompt = build_system_prompt()
             messages = prepare_message_with_history(

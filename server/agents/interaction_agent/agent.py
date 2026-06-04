@@ -4,7 +4,7 @@ from html import escape
 from pathlib import Path
 from typing import Dict, List
 
-from ...services.execution import get_agent_roster
+from ...services.execution import get_agent_roster, get_execution_agent_logs
 
 _prompt_path = Path(__file__).parent / "system_prompt.md"
 SYSTEM_PROMPT = _prompt_path.read_text(encoding="utf-8").strip()
@@ -26,6 +26,7 @@ def prepare_message_with_history(
     sections: List[str] = []
 
     sections.append(_render_conversation_history(transcript))
+    sections.append(f"<execution_agent_memory>\n{_render_execution_agent_memory()}\n</execution_agent_memory>")
     sections.append(f"<active_agents>\n{_render_active_agents()}\n</active_agents>")
     sections.append(_render_current_turn(latest_text, message_type))
 
@@ -39,6 +40,13 @@ def _render_conversation_history(transcript: str) -> str:
     if not history:
         history = "None"
     return f"<conversation_history>\n{history}\n</conversation_history>"
+
+
+def _render_execution_agent_memory() -> str:
+    summary = get_execution_agent_logs().load_summary().strip()
+    if not summary:
+        return "None"
+    return escape(summary, quote=False)
 
 
 # Format currently active execution agents into XML tags for LLM awareness

@@ -66,6 +66,11 @@ class AgentRoster:
             self._agents.append(agent_name)
             self.save()
 
+    def replace_agents(self, agent_names: list[str]) -> None:
+        """Replace the roster contents and persist roster.json."""
+        self._agents = list(agent_names)
+        self.save()
+
     def get_agents(self) -> list[str]:
         """Get list of all agent names."""
         return list(self._agents)

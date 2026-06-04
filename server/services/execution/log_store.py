@@ -6,7 +6,7 @@ import re
 import threading
 from html import escape, unescape
 from pathlib import Path
-from typing import Dict, Iterator, List, Tuple
+from typing import Dict, Iterator, List, Optional, Tuple
 
 from ...logging_config import logger
 from ...utils.timezones import now_in_user_timezone
@@ -65,6 +65,39 @@ class ExecutionAgentLogStore:
     def _log_path(self, agent_name: str) -> Path:
         """Get log file path for an agent."""
         return self._base_dir / f"{_slugify(agent_name)}.log"
+
+    def path_for_agent(self, agent_name: str) -> Path:
+        """Return the log path for an agent name."""
+        return self._log_path(agent_name)
+
+    def summary_path(self) -> Path:
+        """Return the execution-agent summary path."""
+        return self._base_dir / "summary.log"
+
+    def archive_dir(self, archive_id: str) -> Path:
+        """Return an archive directory path for a compaction batch."""
+        return self._base_dir / "archive" / archive_id
+
+    def load_summary(self) -> str:
+        """Load archived execution-agent summary memory."""
+        try:
+            return self.summary_path().read_text(encoding="utf-8")
+        except FileNotFoundError:
+            return ""
+        except Exception as exc:
+            logger.warning(f"Failed to load execution summary: {exc}")
+            return ""
+
+    def write_summary(self, summary: str) -> None:
+        """Rewrite archived execution-agent summary memory."""
+        try:
+            self._base_dir.mkdir(parents=True, exist_ok=True)
+            temp_path = self.summary_path().with_suffix(".tmp")
+            temp_path.write_text(summary, encoding="utf-8")
+            temp_path.replace(self.summary_path())
+        except Exception as exc:
+            logger.error(f"Failed to write execution summary: {exc}")
+            raise
 
     def _append(self, agent_name: str, tag: str, payload: str) -> None:
         """Append an entry with the given tag."""

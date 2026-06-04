@@ -55,6 +55,7 @@ class Settings(BaseModel):
     execution_agent_model: str = Field(default="openrouter/owl-alpha")
     execution_agent_search_model: str = Field(default="openrouter/owl-alpha")
     summarizer_model: str = Field(default="openrouter/owl-alpha")
+    execution_roster_summary_model: Optional[str] = Field(default=None)
     email_classifier_model: str = Field(default="openrouter/owl-alpha")
 
     # Credentials / integrations
@@ -70,6 +71,8 @@ class Settings(BaseModel):
     # Summarisation controls
     conversation_summary_threshold: int = Field(default=100)
     conversation_summary_tail_size: int = Field(default=10)
+    execution_roster_summary_threshold: int = Field(default=2)
+    execution_roster_dormant_after_minutes: int = Field(default=5)
 
     @property
     def cors_allow_origins(self) -> List[str]:
