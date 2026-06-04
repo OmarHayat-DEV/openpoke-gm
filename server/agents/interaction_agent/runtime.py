@@ -8,6 +8,7 @@ from .agent import build_system_prompt, prepare_message_with_history
 from .tools import ToolResult, get_tool_schemas, handle_tool_call
 from ...config import get_settings
 from ...services.conversation import get_conversation_log, get_working_memory_log
+from ...services.email_validation import EmailVerificationResult, email_verifier, extract_email_addresses
 from ...services.execution.compactor import maybe_compact_execution_agents
 from ...openrouter_client import request_chat_completion
 from ...logging_config import logger
@@ -56,6 +57,7 @@ class InteractionAgentRuntime:
         self.conversation_log = get_conversation_log()
         self.working_memory_log = get_working_memory_log()
         self.tool_schemas = get_tool_schemas()
+        self._current_email_warning_footnote = ""
 
         if not self.api_key:
             raise ValueError(
@@ -69,6 +71,9 @@ class InteractionAgentRuntime:
         try:
             transcript_before = self._load_conversation_transcript()
             self.conversation_log.record_user_message(user_message)
+            # Email warnings check
+            email_warnings = self._collect_email_warnings(user_message)
+            self._current_email_warning_footnote = self._format_email_warning_footnote(email_warnings)
 
 
             system_prompt = build_system_prompt()
@@ -101,6 +106,8 @@ class InteractionAgentRuntime:
             summary = await self._run_interaction_loop(system_prompt, messages)
 
             final_response = self._finalize_response(summary)
+            if not summary.user_messages:
+                final_response = self._append_email_warning_footnote(final_response)
 
             if final_response and not summary.user_messages:
                 self.conversation_log.record_reply(final_response)
@@ -118,6 +125,8 @@ class InteractionAgentRuntime:
                 response="",
                 error=str(exc),
             )
+        finally:
+            self._current_email_warning_footnote = ""
 
     # Handle incoming messages from execution agents and generate appropriate responses
     async def handle_agent_message(self, agent_message: str) -> InteractionResult:
@@ -318,6 +327,7 @@ class InteractionAgentRuntime:
             return ToolResult(success=False, payload={"error": error})
 
         try:
+            self._decorate_send_message_tool_call(tool_call)
             self._log_tool_invocation(tool_call, stage="start")
             result = handle_tool_call(tool_call.name, tool_call.arguments)
         except Exception as exc:  # pragma: no cover - defensive
@@ -427,3 +437,66 @@ class InteractionAgentRuntime:
             return summary.user_messages[-1]
 
         return summary.last_assistant_text
+
+    def _collect_email_warnings(self, text: str) -> List[EmailVerificationResult]:
+        warnings: List[EmailVerificationResult] = []
+        for email in extract_email_addresses(text):
+            logger.info("Checking email %s", email)
+            verification = email_verifier(email)
+            logger.info(
+                "Email judgement: %s",
+                verification.status,
+                extra={
+                    "email": email,
+                    "status": verification.status,
+                    "suspicious": verification.suspicious,
+                    "suggested_email": verification.suggested_email,
+                },
+            )
+            if verification.suspicious:
+                logger.warning(
+                    "Prompt user to double check email",
+                    extra={
+                        "email": email,
+                        "status": verification.status,
+                        "suggested_email": verification.suggested_email,
+                    },
+                )
+                warnings.append(verification)
+            else:
+                logger.info(
+                    "Email sanity check passed",
+                    extra={"email": email, "status": verification.status},
+                )
+        return warnings
+
+    def _format_email_warning_footnote(self, warnings: List[EmailVerificationResult]) -> str:
+        if not warnings:
+            return ""
+        if len(warnings) == 1:
+            warning = warnings[0]
+            return f"Note: {self._format_single_email_warning(warning)}"
+        lines = ["Note: A couple of email addresses may need checking:"]
+        lines.extend(f"- {self._format_single_email_warning(warning)}" for warning in warnings)
+        return "\n".join(lines)
+
+    def _format_single_email_warning(self, warning: EmailVerificationResult) -> str:
+        if warning.suggested_email:
+            return f"`{warning.email}` might have a typo. Did you mean `{warning.suggested_email}`?"
+        return f"`{warning.email}` may need double-checking. {warning.message}"
+
+    def _append_email_warning_footnote(self, message: str) -> str:
+        footnote = self._current_email_warning_footnote.strip()
+        if not footnote or not message:
+            return message
+        if footnote in message:
+            return message
+        return f"{message.rstrip()}\n\n{footnote}"
+
+    def _decorate_send_message_tool_call(self, tool_call: _ToolCall) -> None:
+        if tool_call.name != "send_message_to_user":
+            return
+        message = tool_call.arguments.get("message")
+        if not isinstance(message, str):
+            return
+        tool_call.arguments["message"] = self._append_email_warning_footnote(message)

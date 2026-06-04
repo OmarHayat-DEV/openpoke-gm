@@ -39,6 +39,13 @@ def _env_int(name: str, fallback: int) -> int:
         return fallback
 
 
+def _env_bool(name: str, fallback: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return fallback
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
 class Settings(BaseModel):
     """Application settings with lightweight env fallbacks."""
 
@@ -67,6 +74,10 @@ class Settings(BaseModel):
     cors_allow_origins_raw: str = Field(default=os.getenv("OPENPOKE_CORS_ALLOW_ORIGINS", "*"))
     enable_docs: bool = Field(default=os.getenv("OPENPOKE_ENABLE_DOCS", "1") != "0")
     docs_url: Optional[str] = Field(default=os.getenv("OPENPOKE_DOCS_URL", "/docs"))
+
+    # Email verifier controls
+    email_verifier_enabled: bool = Field(default=_env_bool("OPENPOKE_EMAIL_VERIFIER_ENABLED", True))
+    email_verifier_model: Optional[str] = Field(default=os.getenv("OPENPOKE_EMAIL_VERIFIER_MODEL"))
 
     # Summarisation controls
     conversation_summary_threshold: int = Field(default=100)

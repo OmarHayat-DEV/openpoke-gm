@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any, Callable, Dict, List, Optional
 
+from server.logging_config import logger
+from server.services.email_validation import EmailVerificationResult, email_verifier
 from server.services.execution import get_execution_agent_logs
 from server.services.gmail import execute_gmail_tool, get_active_gmail_user_id
 
@@ -60,6 +62,10 @@ _SCHEMAS: List[Dict[str, Any]] = [
                             "mimetype": {"type": "string", "description": "Attachment MIME type."},
                         },
                         "required": ["s3key", "name", "mimetype"],
+                    },
+                    "skip_email_verification": {
+                        "type": "boolean",
+                        "description": "Set true only when the user explicitly confirms using a recipient that was flagged by email verification.",
                     },
                 },
                 "required": ["recipient_email", "subject", "body"],
@@ -314,6 +320,54 @@ _SCHEMAS: List[Dict[str, Any]] = [
 _LOG_STORE = get_execution_agent_logs()
 
 
+def _email_domain(email: Optional[str]) -> Optional[str]:
+    if not email or "@" not in email:
+        return None
+    domain = email.rsplit("@", 1)[-1].strip().lower()
+    return domain or None
+
+
+def _verification_payload(verification: EmailVerificationResult) -> Dict[str, Any]:
+    return {
+        "status": verification.status,
+        "score": verification.score,
+        "suspicious": verification.suspicious,
+    }
+
+
+def _build_recipient_confirmation_result(
+    recipient_email: str,
+    verification: EmailVerificationResult,
+) -> Dict[str, Any]:
+    return {
+        "status": "needs_recipient_confirmation",
+        "recipient_email": recipient_email,
+        "suggested_email": verification.suggested_email,
+        "message": verification.message,
+        "verification": _verification_payload(verification),
+    }
+
+
+def _verify_draft_recipient(recipient_email: str) -> EmailVerificationResult:
+    verification = email_verifier(recipient_email)
+    logger.info(
+        "Email verifier check completed",
+        extra={
+            "recipient_domain": _email_domain(recipient_email),
+            "status": verification.status,
+            "score": verification.score,
+            "suspicious": verification.suspicious,
+            "suggested": bool(verification.suggested_email),
+        },
+    )
+    if verification.status == "UNKNOWN":
+        logger.info(
+            "Email verifier unavailable; continuing draft creation",
+            extra={"recipient_domain": _email_domain(recipient_email)},
+        )
+    return verification
+
+
 # Return Gmail tool schemas
 def get_schemas() -> List[Dict[str, Any]]:
     """Return Gmail tool schemas."""
@@ -354,6 +408,7 @@ def gmail_create_draft(
     is_html: Optional[bool] = None,
     thread_id: Optional[str] = None,
     attachment: Optional[Dict[str, Any]] = None,
+    skip_email_verification: Optional[bool] = None,
 ) -> Dict[str, Any]:
     arguments: Dict[str, Any] = {
         "recipient_email": recipient_email,
@@ -369,6 +424,26 @@ def gmail_create_draft(
     composio_user_id = get_active_gmail_user_id()
     if not composio_user_id:
         return {"error": "Gmail not connected. Please connect Gmail in settings first."}
+
+    if skip_email_verification:
+        logger.info(
+            "Email verifier skipped by explicit user confirmation",
+            extra={"recipient_domain": _email_domain(recipient_email)},
+        )
+    else:
+        verification = _verify_draft_recipient(recipient_email)
+        if verification.suspicious:
+            logger.warning(
+                "Email verifier flagged suspicious recipient; draft creation blocked",
+                extra={
+                    "recipient_domain": _email_domain(recipient_email),
+                    "status": verification.status,
+                    "score": verification.score,
+                    "suggested_domain": _email_domain(verification.suggested_email),
+                },
+            )
+            return _build_recipient_confirmation_result(recipient_email, verification)
+
     return _execute("GMAIL_CREATE_EMAIL_DRAFT", composio_user_id, arguments)
 
 
